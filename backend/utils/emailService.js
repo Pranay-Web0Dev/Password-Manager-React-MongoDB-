@@ -290,12 +290,232 @@ const sendWelcomeEmail = async (email, name) => {
   }
 };
 
+// Add this function to emailService.js
+const sendPasswordUpdatedEmail = async (email, site, username, changes, ipAddress) => {
+  try {
+    const currentTime = new Date().toLocaleString();
+    
+    // Build change description
+    const changesList = [];
+    if (changes.site) changesList.push('Website/App');
+    if (changes.username) changesList.push('Username');
+    if (changes.password) changesList.push('Password');
+    
+    const changesText = changesList.length > 0 
+      ? changesList.join(', ')
+      : 'No changes detected';
+    
+    const mailOptions = {
+      from: `"PassOP Security" <${process.env.EMAIL_FROM}>`,
+      to: email,
+      subject: `Password Updated - ${site}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #f59e0b, #d97706); padding: 30px; text-align: center;">
+            <h1 style="color: white; margin: 0;">✏️ Password Updated</h1>
+          </div>
+          <div style="padding: 30px; background-color: #f9fafb;">
+            <h2 style="color: #111827;">Password Successfully Updated</h2>
+            <p style="color: #4b5563; font-size: 16px;">
+              Your password for <strong>${site}</strong> was updated at ${currentTime}.
+            </p>
+            
+            <div style="background: white; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+              <h3 style="color: #111827; margin-top: 0;">Update Details:</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Website/App:</td>
+                  <td style="padding: 8px 0; font-weight: bold;">${site}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Username:</td>
+                  <td style="padding: 8px 0;">${username}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Updated Fields:</td>
+                  <td style="padding: 8px 0;">
+                    <span style="background-color: #fef3c7; color: #92400e;
+                               padding: 4px 12px; border-radius: 20px; font-size: 12px;">
+                      ${changesText}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Time:</td>
+                  <td style="padding: 8px 0;">${currentTime}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">IP Address:</td>
+                  <td style="padding: 8px 0;">${ipAddress || 'Not available'}</td>
+                </tr>
+              </table>
+            </div>
+            
+            <div style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin: 20px 0;">
+              <h4 style="color: #92400e; margin: 0 0 10px 0;">✅ Update Confirmed</h4>
+              <p style="color: #92400e; font-size: 14px; margin: 0;">
+                Your password changes have been successfully saved and encrypted.
+              </p>
+            </div>
+            
+            <p style="color: #4b5563; font-size: 14px;">
+              <strong>Important:</strong> Remember that your updated password is now protected with your master password encryption.
+            </p>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+              <a href="http://localhost:5173/dashboard" 
+                 style="display: inline-block; background-color: #f59e0b; color: white; 
+                        padding: 12px 24px; text-decoration: none; border-radius: 6px; 
+                        font-weight: bold;">
+                View Updated Password
+              </a>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px;">
+              <p>This is an automated update notification from PassOP Password Manager.</p>
+              <p>If you didn't make these changes, please change your master password immediately.</p>
+            </div>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    console.error('Password update email error:', error);
+    return { success: false, error: error.message };
+  }
+};
 
 
+// Add this function to emailService.js
+const sendMasterPasswordLockedEmail = async (email, failedAttempts, lockDuration, ipAddress) => {
+  try {
+    const currentTime = new Date().toLocaleString();
+    
+    const mailOptions = {
+      from: `"PassOP Security" <${process.env.EMAIL_FROM}>`,
+      to: email,
+      subject: '⚠️ Master Password Locked - Security Alert',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <div style="background: linear-gradient(135deg, #ef4444, #dc2626); padding: 30px; text-align: center;">
+            <h1 style="color: white; margin: 0;">🔐 Master Password Locked</h1>
+          </div>
+          <div style="padding: 30px; background-color: #f9fafb;">
+            <h2 style="color: #111827;">Critical Security Alert</h2>
+            <p style="color: #4b5563; font-size: 16px;">
+              Your master password has been locked due to ${failedAttempts} consecutive failed attempts.
+            </p>
+            
+            <div style="background: white; border-radius: 8px; padding: 20px; margin: 20px 0; border-left: 4px solid #ef4444;">
+              <h3 style="color: #111827; margin-top: 0;">Security Incident Details:</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Failed Attempts:</td>
+                  <td style="padding: 8px 0; font-weight: bold; color: #ef4444;">${failedAttempts}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Lock Duration:</td>
+                  <td style="padding: 8px 0;">${lockDuration} minutes</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Time of Incident:</td>
+                  <td style="padding: 8px 0;">${currentTime}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">IP Address:</td>
+                  <td style="padding: 8px 0;">${ipAddress || 'Not available'}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #6b7280;">Action Taken:</td>
+                  <td style="padding: 8px 0; color: #ef4444;">
+                    <strong>Auto-logout initiated</strong>
+                  </td>
+                </tr>
+              </table>
+            </div>
+            
+            <div style="background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 15px; margin: 20px 0;">
+              <h4 style="color: #991b1b; margin: 0 0 10px 0;">🚨 Immediate Security Measures</h4>
+              <ul style="color: #991b1b; font-size: 14px; margin: 0; padding-left: 20px;">
+                <li>You have been automatically logged out from all devices</li>
+                <li>Your master password is temporarily locked for ${lockDuration} minutes</li>
+                <li>OTP verification required for next login</li>
+                <li>All password operations requiring master password are suspended</li>
+              </ul>
+            </div>
+            
+            <div style="background-color: #fffbeb; border: 1px solid #fcd34d; border-radius: 8px; padding: 15px; margin: 20px 0;">
+              <h4 style="color: #92400e; margin: 0 0 10px 0;">🔒 Next Login Requirements</h4>
+              <ol style="color: #92400e; font-size: 14px; margin: 0; padding-left: 20px;">
+                <li><strong>OTP Verification:</strong> An OTP has been sent to this email</li>
+                <li><strong>Master Password:</strong> You must enter your master password</li>
+                <li><strong>Two-Step Process:</strong> Both OTP and master password are required</li>
+              </ol>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+              <h3 style="color: #111827;">What to do next:</h3>
+              <ol style="color: #4b5563; font-size: 14px; padding-left: 20px;">
+                <li>Check your email for the OTP (also check spam folder)</li>
+                <li>Go to the login page and enter your credentials</li>
+                <li>When prompted, enter the 6-digit OTP</li>
+                <li>Then enter your master password</li>
+                <li>If you've forgotten your master password, use the reset option</li>
+              </ol>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+              <a href="http://localhost:5173/login" 
+                 style="display: inline-block; background-color: #ef4444; color: white; 
+                        padding: 12px 24px; text-decoration: none; border-radius: 6px; 
+                        font-weight: bold; margin-right: 10px;">
+                Go to Login (OTP Required)
+              </a>
+              <a href="http://localhost:5173/forgot-password" 
+                 style="display: inline-block; background-color: #6b7280; color: white; 
+                        padding: 12px 24px; text-decoration: none; border-radius: 6px; 
+                        font-weight: bold;">
+                Reset Password
+              </a>
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px;">
+              <p><strong>Security Note:</strong> This auto-logout feature prevents unauthorized access when multiple incorrect master password attempts are detected.</p>
+              <p>If you didn't attempt to access your account, please contact support immediately.</p>
+            </div>
+          </div>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    console.error('Master password locked email error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+// Don't forget to add to exports:
 module.exports = {
   generateOTP,
   sendOTPEmail,
   sendPasswordAccessedEmail,
+  sendPasswordUpdatedEmail,
   sendFailedLoginEmail,
-  sendWelcomeEmail
+  sendWelcomeEmail,
+  sendMasterPasswordLockedEmail  // Add this
 };
+
+
+// module.exports = {
+//   generateOTP,
+//   sendOTPEmail,
+//   sendPasswordUpdatedEmail,
+//   sendPasswordAccessedEmail,
+//   sendFailedLoginEmail,
+//   sendWelcomeEmail
+// };

@@ -120,6 +120,13 @@ export const passwordAPI = {
   // Password Operations
   decrypt: (id, data) => api.post(`/passwords/${id}/decrypt`, data),
   copy: (id, data) => api.post(`/passwords/${id}/copy`, data),
+
+   // Master password security endpoints
+  verifyMasterWithOTP: (data) => api.post('/auth/verify-master-with-otp', data),
+  getMasterPasswordStatus: () => api.get('/auth/master-password-status'),
+  
+  // Update the verifyMaster function to handle new responses
+  verifyMaster: (data) => api.post('/auth/verify-master', data),
   
   // Bulk Operations
   bulkCreate: (data) => api.post('/passwords/bulk', data),

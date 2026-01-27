@@ -109,7 +109,7 @@ const PasswordGenerator = () => {
                   <div className="bg-gray-50 border-2 border-gray-300 rounded-xl p-4 pr-32">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center flex-1 min-w-0">
-                        <div className="font-mono text-base md:text-lg tracking-wider break-all truncate">
+                        <div className="font-mono text-base md:text-lg tracking-wider break-all truncate text-black">
                           {showPassword ? password : '•'.repeat(password.length || 16)}
                         </div>
                         <button
@@ -312,7 +312,7 @@ const PasswordGenerator = () => {
                         <div className="flex justify-between items-start">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between mb-1">
-                              <div className="font-mono text-sm truncate pr-2">
+                              <div className="font-mono text-sm truncate pr-2 text-black">
                                 {item.password.substring(0, 14)}...
                               </div>
                               <span className="text-xs text-gray-500 flex-shrink-0">

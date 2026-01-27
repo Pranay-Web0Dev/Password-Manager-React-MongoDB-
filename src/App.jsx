@@ -3,10 +3,13 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute from './components/Common/ProtectedRoute';
+import LandingPage from './components/LandingPage'; // Add this
+import GSAPWrapper from './components/GSAPWrapper'; // Add this
 import Login from './components/Auth/Login';
 import Register from './components/Auth/Register';
 import Dashboard from './components/Dashboard/Dashboard';
 import PasswordGenerator from './components/Generator/PasswordGenerator';
+import PasswordManager from './components/Passmanage'; // Your actual password manager
 import Navbar from './components/Common/Navbar';
 
 function App() {
@@ -16,11 +19,16 @@ function App() {
         <div className="App">
           <Toaster position="top-right" />
           <Routes>
+            {/* Public Routes */}
+            {/* <GSAPWrapper> */}
+
+            <Route path="/" element={<LandingPage />} /> {/* Add this line */}
+            {/* </GSAPWrapper> */}
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             
-            {/* Protected Routes */}
-            <Route path="/" element={
+            {/* Protected Routes - These require authentication */}
+            <Route path="/dashboard" element={
               <ProtectedRoute>
                 <>
                   <Navbar />
@@ -29,11 +37,11 @@ function App() {
               </ProtectedRoute>
             } />
             
-            <Route path="/dashboard" element={
+            <Route path="/passwords" element={
               <ProtectedRoute>
                 <>
                   <Navbar />
-                  <Dashboard />
+                  <PasswordManager />
                 </>
               </ProtectedRoute>
             } />
@@ -47,8 +55,8 @@ function App() {
               </ProtectedRoute>
             } />
             
-            {/* Redirect to dashboard if authenticated, otherwise to login */}
-            <Route path="*" element={<Navigate to="/dashboard" />} />
+            {/* Redirect all other routes */}
+            <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </div>
       </Router>

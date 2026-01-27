@@ -1,11 +1,17 @@
 import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { FaUser, FaSignOutAlt, FaKey, FaHome } from 'react-icons/fa';
+import { FaUser, FaSignOutAlt, FaKey, FaHome, FaLock } from 'react-icons/fa';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Don't show navbar on landing page or auth pages
+  if (location.pathname === '/' || location.pathname === '/login' || location.pathname === '/register') {
+    return null;
+  }
 
   const handleLogout = () => {
     logout();
@@ -27,6 +33,10 @@ const Navbar = () => {
                 <FaHome />
                 <span>Dashboard</span>
               </Link>
+              {/* <Link to="/passwords" className="flex items-center space-x-1 hover:text-green-200">
+                <FaLock />
+                <span>Passwords</span>
+              </Link> */}
               <Link to="/generator" className="flex items-center space-x-1 hover:text-green-200">
                 <FaKey />
                 <span>Generator</span>

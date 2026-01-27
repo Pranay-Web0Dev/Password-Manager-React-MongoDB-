@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import OTPVerification from './OTPVerification';
 import AccountLocked from './AccountLocked';
+import MasterPasswordLocked from './MasterPasswordLocked'; // We'll create this
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -11,8 +12,10 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showOTP, setShowOTP] = useState(false);
   const [showLocked, setShowLocked] = useState(false);
+  const [showMasterPasswordLocked, setShowMasterPasswordLocked] = useState(false);
   const [remainingTime, setRemainingTime] = useState(0);
   const [loginData, setLoginData] = useState({ email: '', password: '' });
+  const [masterPasswordLockInfo, setMasterPasswordLockInfo] = useState(null);
   
   const { login, error, setError } = useAuth();
   const navigate = useNavigate();
@@ -23,6 +26,7 @@ const Login = () => {
     setError(null);
     setShowOTP(false);
     setShowLocked(false);
+    setShowMasterPasswordLocked(false);
 
     // Store login data for retry after OTP
     setLoginData({ email, password });
@@ -33,7 +37,12 @@ const Login = () => {
       toast.success('Login successful!');
       navigate('/dashboard');
     } else {
-      if (result.locked) {
+      // Check for master password lock
+      if (result.masterPasswordLocked) {
+        setMasterPasswordLockInfo(result.attemptsInfo || {});
+        setShowMasterPasswordLocked(true);
+        toast.error('Master password locked. OTP required for login.');
+      } else if (result.locked) {
         // Show OTP verification screen
         setShowOTP(true);
         setRemainingTime(result.remainingTime || 15);
@@ -68,10 +77,12 @@ const Login = () => {
       } else {
         toast.error('Please try logging in again.');
         setShowOTP(false);
+        setShowMasterPasswordLocked(false);
       }
     } catch (error) {
       toast.error('Error logging in after OTP verification');
       setShowOTP(false);
+      setShowMasterPasswordLocked(false);
     } finally {
       setIsLoading(false);
     }
@@ -81,10 +92,22 @@ const Login = () => {
     setIsLoading(true);
     
     try {
-      // You would call API to resend OTP here
-      // For now, simulate success
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success('New OTP sent to your email!');
+      // Call API to resend OTP
+      const response = await fetch('http://localhost:4000/api/auth/send-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        toast.success('New OTP sent to your email!');
+      } else {
+        toast.error(data.message || 'Failed to resend OTP');
+      }
     } catch (error) {
       toast.error('Failed to resend OTP');
     } finally {
@@ -100,6 +123,55 @@ const Login = () => {
     setShowLocked(false);
     setShowOTP(true);
   };
+
+  // Auto-logout handler when master password is locked
+  useEffect(() => {
+    const checkMasterPasswordStatus = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (token) {
+          const response = await fetch('http://localhost:4000/api/auth/master-password-status', {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.status && data.status.isLocked) {
+              // Auto logout if master password is locked
+              localStorage.removeItem('token');
+              window.location.href = '/login?masterPasswordLocked=true';
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking master password status:', error);
+      }
+    };
+
+    // Check on mount and every 30 seconds
+    checkMasterPasswordStatus();
+    const interval = setInterval(checkMasterPasswordStatus, 30000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  // If master password is locked, show special screen
+  if (showMasterPasswordLocked) {
+    return (
+      <MasterPasswordLocked
+        email={email}
+        lockInfo={masterPasswordLockInfo}
+        onUnlock={handleUnlockWithOTP}
+        onBack={() => {
+          setShowMasterPasswordLocked(false);
+          setEmail('');
+          setPassword('');
+        }}
+      />
+    );
+  }
 
   // If account is locked, show special locked screen
   if (showLocked) {
@@ -264,7 +336,7 @@ const Login = () => {
               </div>
               <div className="ml-3">
                 <p className="text-sm text-blue-700">
-                  <strong>Security Tip:</strong> Use a strong, unique master password. Enable two-factor authentication for added security.
+                  <strong>Security Tip:</strong> Use a strong, unique master password. After 5 failed master password attempts, you'll be automatically logged out and require OTP for next login.
                 </p>
               </div>
             </div>

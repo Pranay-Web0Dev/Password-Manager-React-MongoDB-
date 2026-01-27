@@ -3,6 +3,7 @@ import { toast } from 'react-hot-toast';
 import AddPassword from './AddPassword';
 import PasswordList from './PasswordList';
 import { passwordAPI } from '../../services/api';
+import { useAutoLogout } from '../../services/useAutoLogout'; 
 import { useAuth } from '../../context/AuthContext';
 
 const Dashboard = () => {
@@ -10,6 +11,8 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const { user } = useAuth();
+
+  useAutoLogout();
 
   useEffect(() => {
     fetchPasswords();
@@ -79,6 +82,21 @@ const Dashboard = () => {
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to copy password');
+    }
+  };
+
+  // ADD THIS NEW FUNCTION FOR UPDATE
+  const handleUpdatePassword = async (id, updatedData) => {
+    try {
+      const response = await passwordAPI.update(id, updatedData);
+      if (response.data.success) {
+        toast.success('Password updated successfully!');
+        fetchPasswords(); // Refresh the list
+        return response.data;
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update password');
+      throw error; // Let PasswordList handle the error
     }
   };
 
@@ -188,6 +206,7 @@ const Dashboard = () => {
               onDelete={handleDeletePassword}
               onCopy={handleCopyPassword}
               onRefresh={fetchPasswords}
+              onUpdate={handleUpdatePassword} // ADD THIS PROP
             />
           )}
         </div>
