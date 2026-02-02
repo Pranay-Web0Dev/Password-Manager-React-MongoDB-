@@ -4,7 +4,8 @@ import { useAuth } from '../../context/AuthContext';
 import { toast } from 'react-hot-toast';
 import OTPVerification from './OTPVerification';
 import AccountLocked from './AccountLocked';
-import MasterPasswordLocked from './MasterPasswordLocked'; // We'll create this
+import MasterPasswordLocked from './MasterPasswordLocked';
+import useAutoLogout from '../../hooks/useAutoLogout';
 
 const Login = () => {
   const [email, setEmail] = useState('');
@@ -16,9 +17,39 @@ const Login = () => {
   const [remainingTime, setRemainingTime] = useState(0);
   const [loginData, setLoginData] = useState({ email: '', password: '' });
   const [masterPasswordLockInfo, setMasterPasswordLockInfo] = useState(null);
+  const [isMasterPasswordLock, setIsMasterPasswordLock] = useState(false);
+  
+  // FIXED: Correct usage of useAutoLogout hook
+  const { isLocked: isMasterPasswordLocked, remainingTime: lockRemainingTime } = useAutoLogout();
   
   const { login, error, setError } = useAuth();
   const navigate = useNavigate();
+
+  // NEW: Handle auto-logout when detected
+  useEffect(() => {
+    if (isMasterPasswordLocked && lockRemainingTime > 0) {
+      // Don't show toast here - let the hook handle it
+      console.log(`Master password locked. Auto-logout in ${lockRemainingTime} minutes.`);
+    }
+  }, [isMasterPasswordLocked, lockRemainingTime]);
+
+  // NEW: Check URL for auto-logout parameter on component mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const autoLogout = urlParams.get('autoLogout');
+    const masterPasswordLocked = urlParams.get('masterPasswordLocked');
+    
+    if (autoLogout) {
+      toast.error('Auto-logout: Master password was locked for security.');
+      // Clear the parameter from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    
+    if (masterPasswordLocked) {
+      toast.error('Master password locked. Please login and verify with OTP.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,6 +58,7 @@ const Login = () => {
     setShowOTP(false);
     setShowLocked(false);
     setShowMasterPasswordLocked(false);
+    setIsMasterPasswordLock(false);
 
     // Store login data for retry after OTP
     setLoginData({ email, password });
@@ -37,26 +69,44 @@ const Login = () => {
       toast.success('Login successful!');
       navigate('/dashboard');
     } else {
-      // Check for master password lock
-      if (result.masterPasswordLocked) {
-        setMasterPasswordLockInfo(result.attemptsInfo || {});
-        setShowMasterPasswordLocked(true);
-        toast.error('Master password locked. OTP required for login.');
-      } else if (result.locked) {
-        // Show OTP verification screen
+      // FIXED LOGIC: Unified OTP handling for ALL OTP scenarios
+      if (result.otpRequired || result.requiresOTP) {
+        // Show OTP verification for ALL OTP-required scenarios
+        setShowOTP(true);
+        setRemainingTime(result.remainingTime || 15);
+        
+        if (result.masterPasswordLocked) {
+          toast.error('Master password locked. OTP sent to your email.');
+          setMasterPasswordLockInfo(result.attemptsInfo || {});
+          setIsMasterPasswordLock(true);
+        } else {
+          toast.error('Account locked. OTP sent to your email.');
+        }
+      } 
+      // Keep backward compatibility for old locked flag
+      else if (result.locked) {
         setShowOTP(true);
         setRemainingTime(result.remainingTime || 15);
         toast.error('Account locked. OTP sent to your email.');
-      } else if (result.otpRequired) {
-        // Show account locked screen with OTP option
-        setShowLocked(true);
-        toast.error('Account locked. Please verify with OTP.');
-      } else {
+      } 
+      // Handle master password lock specifically (deprecated - kept for safety)
+      else if (result.masterPasswordLocked) {
+        toast.error('Master password locked. Please verify with OTP.');
+        setMasterPasswordLockInfo(result.attemptsInfo || {});
+        setShowMasterPasswordLocked(true);
+      } 
+      // Regular errors
+      else {
         toast.error(result.error);
         
         // Show remaining attempts
         if (result.remainingAttempts) {
           toast.error(`Remaining attempts: ${result.remainingAttempts}`);
+        }
+        
+        // Check if we should warn about impending master password lock
+        if (result.attemptsLeft !== undefined && result.attemptsLeft <= 2) {
+          toast.error(`Warning: ${result.attemptsLeft} more failed attempt${result.attemptsLeft === 1 ? '' : 's'} will lock your master password.`);
         }
       }
     }
@@ -68,21 +118,30 @@ const Login = () => {
     setIsLoading(true);
     
     try {
-      // Try to login again after OTP verification
-      const result = await login(loginData.email, loginData.password);
-      
-      if (result.success) {
-        toast.success('Account unlocked and login successful!');
-        navigate('/dashboard');
-      } else {
-        toast.error('Please try logging in again.');
+      // If it's a master password lock, we need a different flow
+      if (isMasterPasswordLock) {
+        // For master password lock, user needs to login again after OTP verification
+        // The OTPVerification component already handles this
+        // Just show success message
+        toast.success('OTP verified! You can now login with your credentials.');
         setShowOTP(false);
-        setShowMasterPasswordLocked(false);
+        setIsMasterPasswordLock(false);
+      } else {
+        // Try to login again after OTP verification for regular account lock
+        const result = await login(loginData.email, loginData.password);
+        
+        if (result.success) {
+          toast.success('Account unlocked and login successful!');
+          navigate('/dashboard');
+        } else {
+          toast.error('Please try logging in again.');
+          setShowOTP(false);
+        }
       }
     } catch (error) {
-      toast.error('Error logging in after OTP verification');
+      toast.error('Error during OTP verification');
       setShowOTP(false);
-      setShowMasterPasswordLocked(false);
+      setIsMasterPasswordLock(false);
     } finally {
       setIsLoading(false);
     }
@@ -124,46 +183,20 @@ const Login = () => {
     setShowOTP(true);
   };
 
-  // Auto-logout handler when master password is locked
-  useEffect(() => {
-    const checkMasterPasswordStatus = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        if (token) {
-          const response = await fetch('http://localhost:4000/api/auth/master-password-status', {
-            headers: {
-              'Authorization': `Bearer ${token}`
-            }
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            if (data.status && data.status.isLocked) {
-              // Auto logout if master password is locked
-              localStorage.removeItem('token');
-              window.location.href = '/login?masterPasswordLocked=true';
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error checking master password status:', error);
-      }
-    };
+  // FIXED: Removed duplicate auto-logout polling since we're using the hook
+  // The useAutoLogout hook handles all auto-logout functionality
 
-    // Check on mount and every 30 seconds
-    checkMasterPasswordStatus();
-    const interval = setInterval(checkMasterPasswordStatus, 30000);
-    
-    return () => clearInterval(interval);
-  }, []);
-
-  // If master password is locked, show special screen
+  // If master password is locked (deprecated path - kept for safety)
   if (showMasterPasswordLocked) {
     return (
       <MasterPasswordLocked
         email={email}
         lockInfo={masterPasswordLockInfo}
-        onUnlock={handleUnlockWithOTP}
+        onUnlock={() => {
+          setShowMasterPasswordLocked(false);
+          setShowOTP(true);
+          setIsMasterPasswordLock(true);
+        }}
         onBack={() => {
           setShowMasterPasswordLocked(false);
           setEmail('');
@@ -173,7 +206,7 @@ const Login = () => {
     );
   }
 
-  // If account is locked, show special locked screen
+  // If account is locked (deprecated path - kept for safety)
   if (showLocked) {
     return (
       <AccountLocked 
@@ -184,7 +217,7 @@ const Login = () => {
     );
   }
 
-  // If OTP verification is required
+  // If OTP verification is required - MAIN FIXED PATH
   if (showOTP) {
     return (
       <OTPVerification
@@ -195,7 +228,9 @@ const Login = () => {
           setShowOTP(false);
           setEmail('');
           setPassword('');
+          setIsMasterPasswordLock(false);
         }}
+        isMasterPasswordLock={isMasterPasswordLock}
       />
     );
   }
@@ -217,6 +252,18 @@ const Login = () => {
           <p className="mt-2 text-center text-sm text-gray-600">
             Secure password management at your fingertips
           </p>
+          
+          {/* NEW: Auto-logout warning badge */}
+          {isMasterPasswordLocked && (
+            <div className="mt-4 text-center">
+              <div className="inline-flex items-center px-4 py-2 rounded-full text-sm font-medium bg-red-100 text-red-800 animate-pulse">
+                <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+                Master Password Locked - Auto-logout in {lockRemainingTime} min
+              </div>
+            </div>
+          )}
         </div>
         
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
@@ -235,7 +282,13 @@ const Login = () => {
                 onChange={(e) => setEmail(e.target.value)}
                 className="appearance-none relative block w-full px-3 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 sm:text-sm"
                 placeholder="you@example.com"
+                disabled={isMasterPasswordLocked} // Disable if auto-logout is pending
               />
+              {isMasterPasswordLocked && (
+                <p className="mt-1 text-xs text-red-600">
+                  Master password locked. Login disabled until verification.
+                </p>
+              )}
             </div>
             <div>
               <div className="flex justify-between items-center mb-1">
@@ -245,7 +298,8 @@ const Login = () => {
                 <button
                   type="button"
                   onClick={handleForgotPassword}
-                  className="text-sm text-green-600 hover:text-green-500"
+                  className="text-sm text-green-600 hover:text-green-500 disabled:text-gray-400"
+                  disabled={isMasterPasswordLocked}
                 >
                   Forgot password?
                 </button>
@@ -258,8 +312,9 @@ const Login = () => {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="appearance-none relative block w-full px-3 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 sm:text-sm"
+                className="appearance-none relative block w-full px-3 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 sm:text-sm disabled:bg-gray-100"
                 placeholder="Enter your password"
+                disabled={isMasterPasswordLocked} // Disable if auto-logout is pending
               />
             </div>
           </div>
@@ -287,6 +342,7 @@ const Login = () => {
               name="remember-me"
               type="checkbox"
               className="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+              disabled={isMasterPasswordLocked}
             />
             <label htmlFor="remember-me" className="ml-2 block text-sm text-gray-900">
               Remember this device
@@ -296,7 +352,7 @@ const Login = () => {
           <div>
             <button
               type="submit"
-              disabled={isLoading}
+              disabled={isLoading || isMasterPasswordLocked}
               className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
             >
               <span className="absolute left-0 inset-y-0 flex items-center pl-3">
@@ -311,14 +367,17 @@ const Login = () => {
                   </svg>
                 )}
               </span>
-              {isLoading ? 'Signing in...' : 'Sign in'}
+              {isMasterPasswordLocked ? 'Auto-logout Pending...' : (isLoading ? 'Signing in...' : 'Sign in')}
             </button>
           </div>
 
           <div className="text-center">
             <p className="text-sm text-gray-600">
               Don't have an account?{' '}
-              <Link to="/register" className="font-medium text-green-600 hover:text-green-500">
+              <Link 
+                to="/register" 
+                className="font-medium text-green-600 hover:text-green-500 disabled:text-gray-400"
+              >
                 Sign up now
               </Link>
             </p>
@@ -355,6 +414,28 @@ const Login = () => {
               <div className="ml-3">
                 <p className="text-sm text-yellow-700">
                   <strong>Warning:</strong> Multiple failed attempts will lock your account. After 5 attempts, you'll need to verify with OTP.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NEW: Auto-logout countdown display */}
+        {isMasterPasswordLocked && (
+          <div className="mt-4 p-4 bg-red-50 border-l-4 border-red-400">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-700">
+                  <strong>Auto-logout Active:</strong> Your master password has been locked due to security concerns. 
+                  Auto-logout will occur in approximately <span className="font-bold">{lockRemainingTime}</span> minutes.
+                </p>
+                <p className="text-xs text-red-600 mt-1">
+                  To prevent auto-logout, please verify your identity with OTP immediately.
                 </p>
               </div>
             </div>

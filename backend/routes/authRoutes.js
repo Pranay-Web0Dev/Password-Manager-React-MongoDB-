@@ -3,8 +3,9 @@
 // const jwt = require('jsonwebtoken');
 // const User = require('../models/User');
 // const { checkPasswordStrength, isValidEmail } = require('../utils/validation');
-// const { sendOTPEmail, sendFailedLoginEmail, sendWelcomeEmail } = require('../utils/emailService');
+// const { sendOTPEmail, sendFailedLoginEmail, sendWelcomeEmail, sendMasterPasswordLockedEmail } = require('../utils/emailService');
 // const { getClientIp } = require('../utils/helpers');
+// const {protect} = require('../middleware/authMiddleware');
 
 // // Generate JWT Token
 // const generateToken = (id) => {
@@ -99,7 +100,7 @@
 // });
 
 // // @route   POST /api/auth/login
-// // @desc    Login user
+// // @desc    Login user with OTP check for master password lock
 // router.post('/login', async (req, res) => {
 //   try {
 //     const { email, password } = req.body;
@@ -124,7 +125,7 @@
 //       });
 //     }
 
-//     // Check if account is locked
+//     // Check if account is locked (regular login)
 //     if (user.isLocked()) {
 //       const remainingTime = Math.ceil((user.lockUntil - Date.now()) / (1000 * 60));
       
@@ -140,6 +141,24 @@
 //         locked: true,
 //         remainingTime,
 //         otpRequired: true
+//       });
+//     }
+
+//     // CHECK FOR MASTER PASSWORD LOCK (NEW)
+//     if (user.requiresOTPForNextLogin) {
+//       // Generate OTP if not already available
+//       if (!user.otp || user.otpExpires < Date.now()) {
+//         const otp = await user.generateAndSaveOTP();
+//         await sendOTPEmail(user.email, otp);
+//       }
+      
+//       return res.status(401).json({
+//         success: false,
+//         message: 'Account requires OTP verification due to master password security lock',
+//         otpRequired: true,
+//         requiresOTP: true,
+//         masterPasswordLocked: true,
+//         attemptsInfo: user.getMasterPasswordAttemptsInfo()
 //       });
 //     }
 
@@ -213,11 +232,12 @@
 // });
 
 // // @route   POST /api/auth/verify-master
-// // @desc    Verify master password
+// // @desc    Verify master password with security tracking
 // router.post('/verify-master', async (req, res) => {
 //   try {
 //     const { masterPassword } = req.body;
 //     const userId = req.user.id;
+//     const ipAddress = getClientIp(req);
 
 //     const user = await User.findById(userId).select('+masterPassword');
     
@@ -228,22 +248,177 @@
 //       });
 //     }
 
-//     const isMatch = await user.compareMasterPassword(masterPassword);
-    
-//     if (!isMatch) {
-//       return res.status(401).json({ 
-//         success: false, 
-//         message: 'Invalid master password' 
+//     // Check if master password is locked
+//     if (user.isMasterPasswordLocked()) {
+//       const remainingTime = Math.ceil(user.getMasterPasswordLockRemaining() / (1000 * 60));
+      
+//       // Generate OTP if not already sent
+//       if (!user.otp || user.otpExpires < Date.now()) {
+//         const otp = await user.generateAndSaveOTP();
+//         await sendOTPEmail(user.email, otp);
+//       }
+      
+//       // Send notification email
+//       if (user.emailNotifications?.masterPasswordLocked) {
+//         await sendMasterPasswordLockedEmail(
+//           user.email,
+//           user.masterPasswordFailedAttempts,
+//           remainingTime,
+//           ipAddress
+//         );
+//       }
+      
+//       return res.status(423).json({
+//         success: false,
+//         message: `Master password is locked due to ${user.masterPasswordFailedAttempts} failed attempts. OTP sent to email.`,
+//         locked: true,
+//         remainingTime,
+//         requiresOTP: true,
+//         attempts: user.masterPasswordFailedAttempts,
+//         autoLogout: true
 //       });
 //     }
 
+//     const isMatch = await user.compareMasterPassword(masterPassword);
+    
+//     if (!isMatch) {
+//       // Increment master password attempts
+//       const lockOccurred = user.incrementMasterPasswordAttempts();
+//       await user.save();
+      
+//       const lockThreshold = user.securitySettings?.masterPasswordLockThreshold || 5;
+//       const attemptsLeft = lockThreshold - user.masterPasswordFailedAttempts;
+      
+//       if (lockOccurred) {
+//         // Generate OTP for next login
+//         const otp = await user.generateAndSaveOTP();
+//         await sendOTPEmail(user.email, otp);
+        
+//         // Send notification email
+//         if (user.emailNotifications?.masterPasswordLocked) {
+//           await sendMasterPasswordLockedEmail(
+//             user.email,
+//             user.masterPasswordFailedAttempts,
+//             user.securitySettings?.masterPasswordLockDuration || 15,
+//             ipAddress
+//           );
+//         }
+        
+//         return res.status(423).json({
+//           success: false,
+//           message: 'Master password locked due to too many failed attempts. OTP sent to email. You will be logged out.',
+//           locked: true,
+//           requiresOTP: true,
+//           attemptsLeft: 0,
+//           autoLogout: true,
+//           lockDuration: user.securitySettings?.masterPasswordLockDuration || 15
+//         });
+//       }
+      
+//       return res.status(401).json({ 
+//         success: false, 
+//         message: 'Invalid master password',
+//         attemptsLeft: attemptsLeft > 0 ? attemptsLeft : 0,
+//         attempts: user.masterPasswordFailedAttempts,
+//         lockThreshold: lockThreshold
+//       });
+//     }
+
+//     // SUCCESS: Reset master password attempts
+//     user.resetMasterPasswordAttempts();
+//     await user.save();
+
 //     res.json({
 //       success: true,
-//       message: 'Master password verified'
+//       message: 'Master password verified successfully'
 //     });
 
 //   } catch (error) {
 //     console.error('Master password verification error:', error);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error' 
+//     });
+//   }
+// });
+
+
+
+
+
+
+// // @route   POST /api/auth/verify-master-with-otp
+// // @desc    Verify master password with OTP (for locked accounts)
+// router.post('/verify-master-with-otp', async (req, res) => {
+//   try {
+//     const { masterPassword, otp } = req.body;
+//     const userId = req.user.id;
+//     const ipAddress = getClientIp(req);
+
+//     const user = await User.findById(userId).select('+masterPassword');
+    
+//     if (!user) {
+//       return res.status(404).json({ 
+//         success: false, 
+//         message: 'User not found' 
+//       });
+//     }
+
+//     // Verify OTP first
+//     const otpResult = user.verifyOTP(otp);
+    
+//     if (!otpResult.valid) {
+//       return res.status(400).json({
+//         success: false,
+//         message: otpResult.reason,
+//         attemptsLeft: otpResult.attemptsLeft
+//       });
+//     }
+
+//     // Now verify master password
+//     const isMatch = await user.compareMasterPassword(masterPassword);
+    
+//     if (!isMatch) {
+//       // Even with OTP, wrong master password should still increment attempts
+//       const lockOccurred = user.incrementMasterPasswordAttempts();
+//       await user.save();
+      
+//       if (lockOccurred) {
+//         // Generate new OTP for next attempt
+//         const newOtp = await user.generateAndSaveOTP();
+//         await sendOTPEmail(user.email, newOtp);
+        
+//         return res.status(423).json({
+//           success: false,
+//           message: 'Master password still incorrect. New OTP sent.',
+//           locked: true,
+//           requiresOTP: true,
+//           autoLogout: true
+//         });
+//       }
+      
+//       const lockThreshold = user.securitySettings?.masterPasswordLockThreshold || 5;
+      
+//       return res.status(401).json({ 
+//         success: false, 
+//         message: 'Invalid master password',
+//         attemptsLeft: lockThreshold - user.masterPasswordFailedAttempts,
+//         attempts: user.masterPasswordFailedAttempts
+//       });
+//     }
+
+//     // SUCCESS - reset everything
+//     user.resetMasterPasswordAttempts();
+//     user.requiresOTPForNextLogin = false;
+//     await user.save();
+
+//     res.json({
+//       success: true,
+//       message: 'Master password verified successfully. Account unlocked.'
+//     });
+
+//   } catch (error) {
+//     console.error('Master password with OTP verification error:', error);
 //     res.status(500).json({ 
 //       success: false, 
 //       message: 'Server error' 
@@ -357,7 +532,7 @@
 //     }
 
 //     // Check if account is locked
-//     if (!user.isLocked()) {
+//     if (!user.isLocked() && !user.requiresOTPForNextLogin) {
 //       return res.status(400).json({
 //         success: false,
 //         message: 'Account is not locked'
@@ -555,7 +730,7 @@
 // // @desc    Update email notification preferences
 // router.put('/update-notifications', async (req, res) => {
 //   try {
-//     const { passwordViewed, passwordCopied, failedAttempts, accountLocked, securityAlerts } = req.body;
+//     const { passwordViewed, passwordCopied, failedAttempts, accountLocked, securityAlerts, masterPasswordLocked } = req.body;
 //     const user = await User.findById(req.user.id);
 
 //     if (!user) {
@@ -571,6 +746,7 @@
 //     if (failedAttempts !== undefined) user.emailNotifications.failedAttempts = failedAttempts;
 //     if (accountLocked !== undefined) user.emailNotifications.accountLocked = accountLocked;
 //     if (securityAlerts !== undefined) user.emailNotifications.securityAlerts = securityAlerts;
+//     if (masterPasswordLocked !== undefined) user.emailNotifications.masterPasswordLocked = masterPasswordLocked;
 
 //     await user.save();
 
@@ -593,7 +769,7 @@
 // // @desc    Update security settings
 // router.put('/update-security', async (req, res) => {
 //   try {
-//     const { autoLock, requireMasterPassword, sessionTimeout } = req.body;
+//     const { autoLock, requireMasterPassword, sessionTimeout, masterPasswordLockThreshold, masterPasswordLockDuration } = req.body;
 //     const user = await User.findById(req.user.id);
 
 //     if (!user) {
@@ -607,6 +783,8 @@
 //     if (autoLock !== undefined) user.securitySettings.autoLock = autoLock;
 //     if (requireMasterPassword !== undefined) user.securitySettings.requireMasterPassword = requireMasterPassword;
 //     if (sessionTimeout !== undefined) user.securitySettings.sessionTimeout = sessionTimeout;
+//     if (masterPasswordLockThreshold !== undefined) user.securitySettings.masterPasswordLockThreshold = masterPasswordLockThreshold;
+//     if (masterPasswordLockDuration !== undefined) user.securitySettings.masterPasswordLockDuration = masterPasswordLockDuration;
 
 //     await user.save();
 
@@ -715,6 +893,8 @@
 
 //     // Update master password
 //     user.masterPassword = newMasterPassword;
+//     // Reset master password attempts when changing password
+//     user.resetMasterPasswordAttempts();
 //     await user.save();
 
 //     res.json({
@@ -826,15 +1006,148 @@
 //   }
 // });
 
+// // @route   GET /api/auth/master-password-status
+// // @desc    Get master password security status
+// router.get('/master-password-status', protect, async (req, res) => {
+//   try {
+//     const user = await User.findById(req.user.id);
+    
+//     if (!user) {
+//       return res.status(404).json({ 
+//         success: false, 
+//         message: 'User not found' 
+//       });
+//     }
+
+//     res.json({
+//       success: true,
+//       status: user.getMasterPasswordAttemptsInfo()
+//     });
+
+//   } catch (error) {
+//     console.error('Get master password status error:', error);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error' 
+//     });
+//   }
+// });
+
+
+// // @route   POST /api/auth/verify-master-token
+// // @desc    Verify master password and get token with verification flag
+// router.post('/verify-master-token', protect, async (req, res) => {
+//   try {
+//     const { masterPassword } = req.body;
+//     const userId = req.user.id;
+//     const ipAddress = getClientIp(req);
+//     const originalToken = req.headers.authorization?.split(' ')[1];
+
+//     const user = await User.findById(userId).select('+masterPassword');
+    
+//     if (!user) {
+//       return res.status(404).json({ 
+//         success: false, 
+//         message: 'User not found' 
+//       });
+//     }
+
+//     // Check if master password is locked
+//     if (user.isMasterPasswordLocked()) {
+//       const remainingTime = Math.ceil(user.getMasterPasswordLockRemaining() / (1000 * 60));
+      
+//       return res.status(423).json({
+//         success: false,
+//         message: `Master password is locked due to ${user.masterPasswordFailedAttempts} failed attempts.`,
+//         locked: true,
+//         remainingTime,
+//         requiresOTP: true,
+//         attempts: user.masterPasswordFailedAttempts,
+//         autoLogout: true
+//       });
+//     }
+
+//     const isMatch = await user.compareMasterPassword(masterPassword);
+    
+//     if (!isMatch) {
+//       // Increment master password attempts
+//       const lockOccurred = user.incrementMasterPasswordAttempts();
+//       await user.save();
+      
+//       const lockThreshold = user.securitySettings?.masterPasswordLockThreshold || 5;
+//       const attemptsLeft = lockThreshold - user.masterPasswordFailedAttempts;
+      
+//       if (lockOccurred) {
+//         // Generate OTP for next login
+//         const otp = await user.generateAndSaveOTP();
+//         await sendOTPEmail(user.email, otp);
+        
+//         // Send notification email
+//         if (user.emailNotifications?.masterPasswordLocked) {
+//           await sendMasterPasswordLockedEmail(
+//             user.email,
+//             user.masterPasswordFailedAttempts,
+//             user.securitySettings?.masterPasswordLockDuration || 15,
+//             ipAddress
+//           );
+//         }
+        
+//         return res.status(423).json({
+//           success: false,
+//           message: 'Master password locked. OTP required.',
+//           locked: true,
+//           requiresOTP: true,
+//           attemptsLeft: 0,
+//           autoLogout: true,
+//           lockDuration: user.securitySettings?.masterPasswordLockDuration || 15
+//         });
+//       }
+      
+//       return res.status(401).json({ 
+//         success: false, 
+//         message: 'Invalid master password',
+//         attemptsLeft: attemptsLeft > 0 ? attemptsLeft : 0,
+//         attempts: user.masterPasswordFailedAttempts,
+//         lockThreshold: lockThreshold,
+//         autoLogout: attemptsLeft <= 1 // Warn if about to lock
+//       });
+//     }
+
+//     // SUCCESS: Reset attempts and generate new token
+//     user.resetMasterPasswordAttempts();
+//     await user.save();
+
+//     // Generate new token with master password verification flag
+//     const { generateMasterPasswordToken } = require('../middleware/authMiddleware');
+//     const newToken = generateMasterPasswordToken(userId, originalToken);
+
+//     res.json({
+//       success: true,
+//       message: 'Master password verified',
+//       token: newToken,
+//       tokenExpires: '1h'
+//     });
+
+//   } catch (error) {
+//     console.error('Master password token verification error:', error);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error' 
+//     });
+//   }
+// });
+
 // module.exports = router;
+
 
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { checkPasswordStrength, isValidEmail } = require('../utils/validation');
-const { sendOTPEmail, sendFailedLoginEmail, sendWelcomeEmail, sendMasterPasswordLockedEmail } = require('../utils/emailService');
+const { sendOTPEmail, sendFailedLoginEmail, sendWelcomeEmail } = require('../utils/emailService');
 const { getClientIp } = require('../utils/helpers');
+const { protect, requireMasterPassword } = require('../middleware/authMiddleware');
 
 // Generate JWT Token
 const generateToken = (id) => {
@@ -929,7 +1242,7 @@ router.post('/register', async (req, res) => {
 });
 
 // @route   POST /api/auth/login
-// @desc    Login user with OTP check for master password lock
+// @desc    Login user
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -954,7 +1267,7 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Check if account is locked (regular login)
+    // Check if account is locked
     if (user.isLocked()) {
       const remainingTime = Math.ceil((user.lockUntil - Date.now()) / (1000 * 60));
       
@@ -973,30 +1286,12 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // CHECK FOR MASTER PASSWORD LOCK (NEW)
-    if (user.requiresOTPForNextLogin) {
-      // Generate OTP if not already available
-      if (!user.otp || user.otpExpires < Date.now()) {
-        const otp = await user.generateAndSaveOTP();
-        await sendOTPEmail(user.email, otp);
-      }
-      
-      return res.status(401).json({
-        success: false,
-        message: 'Account requires OTP verification due to master password security lock',
-        otpRequired: true,
-        requiresOTP: true,
-        masterPasswordLocked: true,
-        attemptsInfo: user.getMasterPasswordAttemptsInfo()
-      });
-    }
-
     // Check password
     const isPasswordMatch = await user.comparePassword(password);
     
     if (!isPasswordMatch) {
       // Add to login history
-      await user.addLoginHistory(ipAddress, userAgent, false);
+      user.addLoginHistory(ipAddress, userAgent, false);
       
       // Increment failed attempts
       user.incrementFailedAttempts();
@@ -1032,7 +1327,7 @@ router.post('/login', async (req, res) => {
     user.resetFailedAttempts();
     user.lastLogin = Date.now();
     user.lastActivity = Date.now();
-    await user.addLoginHistory(ipAddress, userAgent, true);
+    user.addLoginHistory(ipAddress, userAgent, true);
     await user.save();
 
     // Generate token
@@ -1061,12 +1356,13 @@ router.post('/login', async (req, res) => {
 });
 
 // @route   POST /api/auth/verify-master
-// @desc    Verify master password with security tracking
-router.post('/verify-master', async (req, res) => {
+// @desc    Verify master password - tracks wrong attempts and locks account like login
+router.post('/verify-master', protect, async (req, res) => {
   try {
     const { masterPassword } = req.body;
     const userId = req.user.id;
     const ipAddress = getClientIp(req);
+    const userAgent = req.headers['user-agent'];
 
     const user = await User.findById(userId).select('+masterPassword');
     
@@ -1077,84 +1373,67 @@ router.post('/verify-master', async (req, res) => {
       });
     }
 
-    // Check if master password is locked
-    if (user.isMasterPasswordLocked()) {
-      const remainingTime = Math.ceil(user.getMasterPasswordLockRemaining() / (1000 * 60));
+    // Check if account is already locked (from any type of failed attempts)
+    if (user.isLocked()) {
+      const remainingTime = Math.ceil((user.lockUntil - Date.now()) / (1000 * 60));
       
-      // Generate OTP if not already sent
+      // Send OTP email if not already sent or expired
       if (!user.otp || user.otpExpires < Date.now()) {
         const otp = await user.generateAndSaveOTP();
         await sendOTPEmail(user.email, otp);
       }
       
-      // Send notification email
-      if (user.emailNotifications?.masterPasswordLocked) {
-        await sendMasterPasswordLockedEmail(
-          user.email,
-          user.masterPasswordFailedAttempts,
-          remainingTime,
-          ipAddress
-        );
-      }
-      
       return res.status(423).json({
         success: false,
-        message: `Master password is locked due to ${user.masterPasswordFailedAttempts} failed attempts. OTP sent to email.`,
+        message: `Account is locked. An OTP has been sent to your email.`,
         locked: true,
         remainingTime,
-        requiresOTP: true,
-        attempts: user.masterPasswordFailedAttempts,
-        autoLogout: true
+        otpRequired: true,
+        autoLogout: true // Auto logout when account is locked
       });
     }
 
+    // Verify master password
     const isMatch = await user.compareMasterPassword(masterPassword);
     
     if (!isMatch) {
-      // Increment master password attempts
-      const lockOccurred = user.incrementMasterPasswordAttempts();
+      // Track this as a failed attempt (same as login)
+      user.addLoginHistory(ipAddress, userAgent, false);
+      
+      // Increment failed attempts (this will lock account after 5 attempts)
+      user.incrementFailedAttempts();
       await user.save();
-      
-      const lockThreshold = user.securitySettings?.masterPasswordLockThreshold || 5;
-      const attemptsLeft = lockThreshold - user.masterPasswordFailedAttempts;
-      
-      if (lockOccurred) {
-        // Generate OTP for next login
+
+      // Send email notification for multiple failed attempts
+      if (user.failedAttempts >= 3 && user.emailNotifications?.failedAttempts) {
+        await sendFailedLoginEmail(user.email, user.failedAttempts, ipAddress);
+      }
+
+      // Check if account is now locked after this attempt
+      if (user.failedAttempts >= 5) {
         const otp = await user.generateAndSaveOTP();
         await sendOTPEmail(user.email, otp);
         
-        // Send notification email
-        if (user.emailNotifications?.masterPasswordLocked) {
-          await sendMasterPasswordLockedEmail(
-            user.email,
-            user.masterPasswordFailedAttempts,
-            user.securitySettings?.masterPasswordLockDuration || 15,
-            ipAddress
-          );
-        }
-        
         return res.status(423).json({
           success: false,
-          message: 'Master password locked due to too many failed attempts. OTP sent to email. You will be logged out.',
+          message: 'Account locked due to too many failed master password attempts. OTP sent to email.',
           locked: true,
-          requiresOTP: true,
-          attemptsLeft: 0,
-          autoLogout: true,
-          lockDuration: user.securitySettings?.masterPasswordLockDuration || 15
+          otpRequired: true,
+          autoLogout: true // Auto logout when account gets locked
         });
       }
-      
+
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid master password',
-        attemptsLeft: attemptsLeft > 0 ? attemptsLeft : 0,
-        attempts: user.masterPasswordFailedAttempts,
-        lockThreshold: lockThreshold
+        failedAttempts: user.failedAttempts,
+        remainingAttempts: 5 - user.failedAttempts
       });
     }
 
-    // SUCCESS: Reset master password attempts
-    user.resetMasterPasswordAttempts();
+    // SUCCESS: Master password verified
+    // Reset failed attempts (including those from master password failures)
+    user.resetFailedAttempts();
     await user.save();
 
     res.json({
@@ -1164,85 +1443,6 @@ router.post('/verify-master', async (req, res) => {
 
   } catch (error) {
     console.error('Master password verification error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error' 
-    });
-  }
-});
-
-// @route   POST /api/auth/verify-master-with-otp
-// @desc    Verify master password with OTP (for locked accounts)
-router.post('/verify-master-with-otp', async (req, res) => {
-  try {
-    const { masterPassword, otp } = req.body;
-    const userId = req.user.id;
-    const ipAddress = getClientIp(req);
-
-    const user = await User.findById(userId).select('+masterPassword');
-    
-    if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
-    }
-
-    // Verify OTP first
-    const otpResult = user.verifyOTP(otp);
-    
-    if (!otpResult.valid) {
-      return res.status(400).json({
-        success: false,
-        message: otpResult.reason,
-        attemptsLeft: otpResult.attemptsLeft
-      });
-    }
-
-    // Now verify master password
-    const isMatch = await user.compareMasterPassword(masterPassword);
-    
-    if (!isMatch) {
-      // Even with OTP, wrong master password should still increment attempts
-      const lockOccurred = user.incrementMasterPasswordAttempts();
-      await user.save();
-      
-      if (lockOccurred) {
-        // Generate new OTP for next attempt
-        const newOtp = await user.generateAndSaveOTP();
-        await sendOTPEmail(user.email, newOtp);
-        
-        return res.status(423).json({
-          success: false,
-          message: 'Master password still incorrect. New OTP sent.',
-          locked: true,
-          requiresOTP: true,
-          autoLogout: true
-        });
-      }
-      
-      const lockThreshold = user.securitySettings?.masterPasswordLockThreshold || 5;
-      
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid master password',
-        attemptsLeft: lockThreshold - user.masterPasswordFailedAttempts,
-        attempts: user.masterPasswordFailedAttempts
-      });
-    }
-
-    // SUCCESS - reset everything
-    user.resetMasterPasswordAttempts();
-    user.requiresOTPForNextLogin = false;
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Master password verified successfully. Account unlocked.'
-    });
-
-  } catch (error) {
-    console.error('Master password with OTP verification error:', error);
     res.status(500).json({ 
       success: false, 
       message: 'Server error' 
@@ -1277,14 +1477,7 @@ router.post('/send-otp', async (req, res) => {
     const otp = await user.generateAndSaveOTP();
     
     // Send OTP email
-    const emailResult = await sendOTPEmail(email, otp);
-    
-    if (!emailResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send OTP email'
-      });
-    }
+    await sendOTPEmail(email, otp);
 
     res.json({
       success: true,
@@ -1315,16 +1508,23 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Verify OTP
+    // Verify OTP (this method no longer saves)
     const result = user.verifyOTP(otp);
     
     if (!result.valid) {
+      // Save the updated attempts count
+      await user.save();
+      
       return res.status(400).json({
         success: false,
         message: result.reason,
         attemptsLeft: result.attemptsLeft
       });
     }
+
+    // OTP is valid - reset everything
+    // The verifyOTP method already cleared the fields, now save once
+    await user.save();
 
     res.json({
       success: true,
@@ -1333,57 +1533,17 @@ router.post('/verify-otp', async (req, res) => {
 
   } catch (error) {
     console.error('Verify OTP error:', error);
+    
+    if (error.name === 'ParallelSaveError') {
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Server busy. Please try again.' 
+      });
+    }
+    
     res.status(500).json({ 
       success: false, 
       message: 'Server error verifying OTP' 
-    });
-  }
-});
-
-// @route   POST /api/auth/unlock-account
-// @desc    Unlock account with OTP
-router.post('/unlock-account', async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
-    }
-
-    // Check if account is locked
-    if (!user.isLocked() && !user.requiresOTPForNextLogin) {
-      return res.status(400).json({
-        success: false,
-        message: 'Account is not locked'
-      });
-    }
-
-    // Verify OTP
-    const result = user.verifyOTP(otp);
-    
-    if (!result.valid) {
-      return res.status(400).json({
-        success: false,
-        message: result.reason,
-        attemptsLeft: result.attemptsLeft
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Account unlocked successfully'
-    });
-
-  } catch (error) {
-    console.error('Unlock account error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error unlocking account' 
     });
   }
 });
@@ -1408,14 +1568,7 @@ router.post('/forgot-password', async (req, res) => {
     const otp = await user.generateAndSaveOTP();
     
     // Send password reset email with OTP
-    const emailResult = await sendOTPEmail(email, otp, 'password-reset');
-    
-    if (!emailResult.success) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to send reset email'
-      });
-    }
+    await sendOTPEmail(email, otp, 'password-reset');
 
     res.json({
       success: true,
@@ -1446,10 +1599,12 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Verify OTP first
+    // Verify OTP first (doesn't save)
     const otpResult = user.verifyOTP(otp);
     
     if (!otpResult.valid) {
+      await user.save();
+      
       return res.status(400).json({
         success: false,
         message: otpResult.reason,
@@ -1467,8 +1622,9 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    // Update password
+    // Update password and reset attempts
     user.password = newPassword;
+    user.resetFailedAttempts();
     await user.save();
 
     res.json({
@@ -1487,7 +1643,7 @@ router.post('/reset-password', async (req, res) => {
 
 // @route   GET /api/auth/me
 // @desc    Get current user
-router.get('/me', async (req, res) => {
+router.get('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
       .select('-password -masterPassword -otp -otpExpires -otpAttempts');
@@ -1515,7 +1671,7 @@ router.get('/me', async (req, res) => {
 
 // @route   PUT /api/auth/update-profile
 // @desc    Update user profile
-router.put('/update-profile', async (req, res) => {
+router.put('/update-profile', protect, async (req, res) => {
   try {
     const { name, backupEmail, timezone, language } = req.body;
     const user = await User.findById(req.user.id);
@@ -1552,9 +1708,9 @@ router.put('/update-profile', async (req, res) => {
 
 // @route   PUT /api/auth/update-notifications
 // @desc    Update email notification preferences
-router.put('/update-notifications', async (req, res) => {
+router.put('/update-notifications', protect, async (req, res) => {
   try {
-    const { passwordViewed, passwordCopied, failedAttempts, accountLocked, securityAlerts, masterPasswordLocked } = req.body;
+    const { passwordViewed, passwordCopied, failedAttempts, accountLocked, securityAlerts } = req.body;
     const user = await User.findById(req.user.id);
 
     if (!user) {
@@ -1570,7 +1726,6 @@ router.put('/update-notifications', async (req, res) => {
     if (failedAttempts !== undefined) user.emailNotifications.failedAttempts = failedAttempts;
     if (accountLocked !== undefined) user.emailNotifications.accountLocked = accountLocked;
     if (securityAlerts !== undefined) user.emailNotifications.securityAlerts = securityAlerts;
-    if (masterPasswordLocked !== undefined) user.emailNotifications.masterPasswordLocked = masterPasswordLocked;
 
     await user.save();
 
@@ -1591,9 +1746,9 @@ router.put('/update-notifications', async (req, res) => {
 
 // @route   PUT /api/auth/update-security
 // @desc    Update security settings
-router.put('/update-security', async (req, res) => {
+router.put('/update-security', protect, async (req, res) => {
   try {
-    const { autoLock, requireMasterPassword, sessionTimeout, masterPasswordLockThreshold, masterPasswordLockDuration } = req.body;
+    const { autoLock, requireMasterPassword, sessionTimeout } = req.body;
     const user = await User.findById(req.user.id);
 
     if (!user) {
@@ -1607,8 +1762,6 @@ router.put('/update-security', async (req, res) => {
     if (autoLock !== undefined) user.securitySettings.autoLock = autoLock;
     if (requireMasterPassword !== undefined) user.securitySettings.requireMasterPassword = requireMasterPassword;
     if (sessionTimeout !== undefined) user.securitySettings.sessionTimeout = sessionTimeout;
-    if (masterPasswordLockThreshold !== undefined) user.securitySettings.masterPasswordLockThreshold = masterPasswordLockThreshold;
-    if (masterPasswordLockDuration !== undefined) user.securitySettings.masterPasswordLockDuration = masterPasswordLockDuration;
 
     await user.save();
 
@@ -1629,7 +1782,7 @@ router.put('/update-security', async (req, res) => {
 
 // @route   POST /api/auth/change-password
 // @desc    Change password (requires current password)
-router.post('/change-password', async (req, res) => {
+router.post('/change-password', protect, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user.id;
@@ -1682,7 +1835,7 @@ router.post('/change-password', async (req, res) => {
 
 // @route   POST /api/auth/change-master-password
 // @desc    Change master password (requires current master password)
-router.post('/change-master-password', async (req, res) => {
+router.post('/change-master-password', protect, requireMasterPassword, async (req, res) => {
   try {
     const { currentMasterPassword, newMasterPassword } = req.body;
     const userId = req.user.id;
@@ -1717,8 +1870,6 @@ router.post('/change-master-password', async (req, res) => {
 
     // Update master password
     user.masterPassword = newMasterPassword;
-    // Reset master password attempts when changing password
-    user.resetMasterPasswordAttempts();
     await user.save();
 
     res.json({
@@ -1737,7 +1888,7 @@ router.post('/change-master-password', async (req, res) => {
 
 // @route   GET /api/auth/login-history
 // @desc    Get user login history
-router.get('/login-history', async (req, res) => {
+router.get('/login-history', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('loginHistory');
     
@@ -1763,8 +1914,8 @@ router.get('/login-history', async (req, res) => {
 });
 
 // @route   POST /api/auth/logout
-// @desc    Logout user (server-side session cleanup)
-router.post('/logout', async (req, res) => {
+// @desc    Logout user
+router.post('/logout', protect, async (req, res) => {
   try {
     // Update last activity
     const user = await User.findById(req.user.id);
@@ -1787,52 +1938,9 @@ router.post('/logout', async (req, res) => {
   }
 });
 
-// @route   POST /api/auth/verify-email
-// @desc    Send email verification
-router.post('/verify-email', async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'User not found' 
-      });
-    }
-
-    if (user.isVerified) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is already verified'
-      });
-    }
-
-    // Generate verification token
-    const verificationToken = require('crypto').randomBytes(32).toString('hex');
-    user.verificationToken = verificationToken;
-    user.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
-    await user.save();
-
-    // Send verification email (implement this in emailService)
-    // await sendVerificationEmail(user.email, verificationToken);
-
-    res.json({
-      success: true,
-      message: 'Verification email sent'
-    });
-
-  } catch (error) {
-    console.error('Verify email error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error sending verification email' 
-    });
-  }
-});
-
 // @route   GET /api/auth/master-password-status
 // @desc    Get master password security status
-router.get('/master-password-status', async (req, res) => {
+router.get('/master-password-status', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     
@@ -1845,7 +1953,10 @@ router.get('/master-password-status', async (req, res) => {
 
     res.json({
       success: true,
-      status: user.getMasterPasswordAttemptsInfo()
+      failedAttempts: user.failedAttempts,
+      isLocked: user.isLocked(),
+      remainingAttempts: 5 - user.failedAttempts,
+      lockThreshold: 5
     });
 
   } catch (error) {

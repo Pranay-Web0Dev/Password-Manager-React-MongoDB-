@@ -12,10 +12,19 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
+    // Focus first input on mount
+    if (inputRefs.current[0]) {
+      setTimeout(() => {
+        inputRefs.current[0]?.focus();
+      }, 100);
+    }
+
+    // Timer countdown
     const countdown = setInterval(() => {
       setTimer(prev => {
         if (prev <= 1) {
           setCanResend(true);
+          clearInterval(countdown);
           return 0;
         }
         return prev - 1;
@@ -25,51 +34,88 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
     return () => clearInterval(countdown);
   }, []);
 
+  // Simple handleChange function
   const handleChange = (index, value) => {
-    if (value.length > 1) {
-      value = value[value.length - 1];
-    }
+    // Remove non-numeric characters
+    value = value.replace(/\D/g, '');
     
-    if (!/^\d*$/.test(value)) return;
+    // Only allow single digit
+    if (value.length > 1) {
+      value = value.slice(-1);
+    }
     
     const newOtp = [...otp];
     newOtp[index] = value;
     setOtp(newOtp);
     
-    // Auto-focus next input
-    if (value !== '' && index < 5) {
-      inputRefs.current[index + 1].focus();
+    // Auto focus next input
+    if (value && index < 5) {
+      setTimeout(() => {
+        inputRefs.current[index + 1]?.focus();
+      }, 10);
     }
   };
 
+  // Handle backspace
   const handleKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && otp[index] === '' && index > 0) {
-      inputRefs.current[index - 1].focus();
+    if (e.key === 'Backspace') {
+      if (!otp[index] && index > 0) {
+        // Move to previous input if current is empty
+        const newOtp = [...otp];
+        newOtp[index - 1] = '';
+        setOtp(newOtp);
+        setTimeout(() => {
+          inputRefs.current[index - 1]?.focus();
+        }, 10);
+      } else if (otp[index]) {
+        // Clear current input if it has value
+        const newOtp = [...otp];
+        newOtp[index] = '';
+        setOtp(newOtp);
+      }
+    }
+    
+    // Handle arrow keys
+    if (e.key === 'ArrowRight' && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+    if (e.key === 'ArrowLeft' && index > 0) {
+      inputRefs.current[index - 1]?.focus();
     }
   };
 
+  // Handle paste
   const handlePaste = (e) => {
     e.preventDefault();
-    const pasteData = e.clipboardData.getData('text').slice(0, 6);
-    if (!/^\d*$/.test(pasteData)) return;
+    const pasteData = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
     
-    const newOtp = [...otp];
-    pasteData.split('').forEach((digit, index) => {
-      if (index < 6) newOtp[index] = digit;
-    });
-    setOtp(newOtp);
-    
-    // Focus last input
-    const lastIndex = Math.min(pasteData.length, 5);
-    inputRefs.current[lastIndex]?.focus();
+    if (pasteData.length > 0) {
+      const newOtp = ['', '', '', '', '', ''];
+      pasteData.split('').forEach((digit, index) => {
+        if (index < 6) newOtp[index] = digit;
+      });
+      setOtp(newOtp);
+      
+      // Focus the last filled input
+      const lastFilledIndex = Math.min(pasteData.length - 1, 5);
+      setTimeout(() => {
+        inputRefs.current[lastFilledIndex]?.focus();
+      }, 10);
+    }
   };
 
+  // Handle submit
   const handleSubmit = async (e) => {
     e.preventDefault();
     const otpString = otp.join('');
     
     if (otpString.length !== 6) {
-      toast.error('Please enter 6-digit OTP');
+      toast.error('Please enter a complete 6-digit OTP');
+      // Find first empty input and focus it
+      const emptyIndex = otp.findIndex(digit => !digit);
+      if (emptyIndex !== -1 && inputRefs.current[emptyIndex]) {
+        inputRefs.current[emptyIndex].focus();
+      }
       return;
     }
 
@@ -83,15 +129,29 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
       
       if (response.data.success) {
         toast.success('OTP verified successfully!');
-        onVerify();
+        if (onVerify) {
+          onVerify();
+        }
+      } else {
+        toast.error(response.data.message || 'Verification failed');
       }
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Invalid OTP');
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          'Verification failed. Please try again.';
+      toast.error(errorMessage);
+      
+      // Clear OTP on error
+      setOtp(['', '', '', '', '', '']);
+      if (inputRefs.current[0]) {
+        inputRefs.current[0].focus();
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Handle resend OTP
   const handleResendOTP = async () => {
     if (!canResend) return;
     
@@ -105,7 +165,27 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
         setTimer(60);
         setCanResend(false);
         setOtp(['', '', '', '', '', '']);
-        inputRefs.current[0].focus();
+        
+        // Start timer again
+        const newTimer = setInterval(() => {
+          setTimer(prev => {
+            if (prev <= 1) {
+              setCanResend(true);
+              clearInterval(newTimer);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        
+        // Focus first input
+        setTimeout(() => {
+          if (inputRefs.current[0]) {
+            inputRefs.current[0].focus();
+          }
+        }, 100);
+      } else {
+        toast.error(response.data.message || 'Failed to resend OTP');
       }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to resend OTP');
@@ -122,26 +202,26 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
             Verify Your Identity
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            We've sent a 6-digit OTP to {email}
+            We've sent a 6-digit OTP to <span className="font-semibold">{email}</span>
           </p>
         </div>
         
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {/* OTP Inputs */}
-          <div className="flex justify-center space-x-4">
+          {/* OTP Inputs - SIMPLIFIED VERSION */}
+          <div className="flex justify-center gap-3">
             {otp.map((digit, index) => (
               <input
                 key={index}
                 ref={el => inputRefs.current[index] = el}
                 type="text"
-                inputMode="numeric"
-                maxLength="1"
                 value={digit}
                 onChange={(e) => handleChange(index, e.target.value)}
                 onKeyDown={(e) => handleKeyDown(index, e)}
                 onPaste={handlePaste}
-                className="w-14 h-14 text-center text-2xl font-bold border-2 border-gray-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none transition-colors"
+                maxLength="1"
+                className="w-12 h-12 sm:w-14 sm:h-14 text-center text-3xl font-bold border-2 border-gray-300 rounded-lg focus:border-green-500 focus:ring-2 focus:ring-green-200 outline-none transition-colors text-black bg-white shadow-sm"
                 disabled={isLoading}
+                autoFocus={index === 0}
               />
             ))}
           </div>
@@ -150,22 +230,20 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
           <div className="text-center">
             <p className="text-sm text-gray-600">
               {canResend ? (
-                <span>Didn't receive OTP?</span>
+                <span>OTP expired. Click below to resend</span>
               ) : (
-                <span>Resend OTP in {timer}s</span>
+                <span>Resend OTP in <span className="font-bold">{timer}s</span></span>
               )}
             </p>
             
-            {canResend && (
-              <button
-                type="button"
-                onClick={handleResendOTP}
-                disabled={isLoading}
-                className="mt-2 text-green-600 hover:text-green-700 font-medium disabled:opacity-50"
-              >
-                Resend OTP
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleResendOTP}
+              disabled={!canResend || isLoading}
+              className={`mt-2 text-sm font-medium ${canResend ? 'text-green-600 hover:text-green-700' : 'text-gray-400'} disabled:cursor-not-allowed`}
+            >
+              Resend OTP
+            </button>
           </div>
           
           {/* Submit Button */}
@@ -173,33 +251,39 @@ const OTPVerification = ({ email, onVerify, onResend }) => {
             <button
               type="submit"
               disabled={isLoading}
-              className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-3 px-4 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? 'Verifying...' : 'Verify OTP'}
             </button>
           </div>
           
-          {/* Back to Login */}
-          <div className="text-center">
+          {/* Back Button */}
+          <div className="text-center pt-4">
             <button
               type="button"
               onClick={() => navigate('/login')}
-              className="text-sm text-gray-600 hover:text-gray-800"
+              className="text-sm text-gray-600 hover:text-gray-800 hover:underline"
             >
-              Back to Login
+              ← Back to Login
             </button>
           </div>
         </form>
         
         {/* Instructions */}
-        <div className="mt-8 p-4 bg-blue-50 rounded-lg">
+        <div className="mt-8 p-4 bg-blue-50 rounded-lg border border-blue-100">
           <h3 className="text-sm font-medium text-blue-800 mb-2">📧 Check these places:</h3>
           <ul className="text-xs text-blue-700 space-y-1">
-            <li>• Your email inbox (check spam folder too)</li>
-            <li>• The OTP is valid for 10 minutes</li>
-            <li>• Enter the 6-digit code exactly as shown</li>
-            <li>• After 3 failed attempts, you'll need to request a new OTP</li>
+            <li>• Check your email inbox and spam folder</li>
+            <li>• OTP is valid for 10 minutes</li>
+            <li>• Enter the 6-digit code you received</li>
+            <li>• You have 3 attempts before OTP expires</li>
           </ul>
+        </div>
+        
+        {/* Debug Info - Remove in production */}
+        <div className="mt-4 p-3 bg-gray-100 rounded text-xs text-gray-600">
+          <p>Debug: OTP value: {otp.join('')}</p>
+          <p>Debug: OTP length: {otp.join('').length}</p>
         </div>
       </div>
     </div>

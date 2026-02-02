@@ -28,45 +28,32 @@ export const authService = {
     } catch (error) {
       const errorMsg = error.response?.data?.message;
       const status = error.response?.status;
+      const data = error.response?.data;
       
-      // Handle master password lock
-      if (status === 401 && error.response?.data?.masterPasswordLocked) {
-        return {
-          success: false,
-          error: errorMsg,
-          masterPasswordLocked: true,
-          attemptsInfo: error.response?.data?.attemptsInfo
-        };
-      }
-      
-      // Handle locked account
-      if (status === 423) {
-        return {
-          success: false,
-          error: errorMsg,
-          locked: true,
-          remainingTime: error.response?.data?.remainingTime,
-          otpRequired: error.response?.data?.otpRequired
-        };
-      }
-      
-      // Handle OTP required for next login
-      if (status === 401 && error.response?.data?.requiresOTP) {
+      // FIXED: Unified OTP handling for ALL scenarios
+      // Check for any OTP requirement (regular lock OR master password lock)
+      if ((status === 423 || status === 401) && (data?.otpRequired || data?.requiresOTP)) {
         return {
           success: false,
           error: errorMsg,
           otpRequired: true,
-          requiresOTP: true,
-          masterPasswordLocked: error.response?.data?.masterPasswordLocked,
-          attemptsInfo: error.response?.data?.attemptsInfo
+          requiresOTP: data?.requiresOTP || false,
+          locked: data?.locked || false,
+          masterPasswordLocked: data?.masterPasswordLocked || false,
+          remainingTime: data?.remainingTime,
+          attemptsInfo: data?.attemptsInfo,
+          attempts: data?.attempts,
+          failedAttempts: data?.failedAttempts,
+          remainingAttempts: data?.remainingAttempts
         };
       }
       
+      // Handle other error cases
       return {
         success: false,
         error: errorMsg || 'Login failed',
-        failedAttempts: error.response?.data?.failedAttempts,
-        remainingAttempts: error.response?.data?.remainingAttempts
+        failedAttempts: data?.failedAttempts,
+        remainingAttempts: data?.remainingAttempts
       };
     }
   },
@@ -78,18 +65,20 @@ export const authService = {
     } catch (error) {
       const errorMsg = error.response?.data?.message;
       const status = error.response?.status;
+      const data = error.response?.data;
       
-      // Handle master password lock
+      // FIXED: Consistent OTP flag handling
       if (status === 423) {
         return {
           success: false,
           error: errorMsg,
           locked: true,
-          requiresOTP: true,
-          autoLogout: error.response?.data?.autoLogout,
-          attempts: error.response?.data?.attempts,
-          lockDuration: error.response?.data?.lockDuration,
-          otpRequired: error.response?.data?.otpRequired
+          otpRequired: true,
+          requiresOTP: data?.requiresOTP || true,
+          autoLogout: data?.autoLogout,
+          attempts: data?.attempts,
+          lockDuration: data?.lockDuration,
+          remainingTime: data?.remainingTime
         };
       }
       
@@ -98,9 +87,59 @@ export const authService = {
         return {
           success: false,
           error: errorMsg,
-          attemptsLeft: error.response?.data?.attemptsLeft,
-          attempts: error.response?.data?.attempts,
-          lockThreshold: error.response?.data?.lockThreshold
+          attemptsLeft: data?.attemptsLeft,
+          attempts: data?.attempts,
+          lockThreshold: data?.lockThreshold
+        };
+      }
+      
+      return {
+        success: false,
+        error: errorMsg || 'Verification failed'
+      };
+    }
+  },
+
+  // NEW: Token-based master password verification
+  verifyMasterToken: async (masterPassword) => {
+    try {
+      const response = await authAPI.verifyMasterToken({ masterPassword });
+      
+      if (response.data.success && response.data.token) {
+        localStorage.setItem('token', response.data.token);
+        return { success: true, data: response.data };
+      }
+      
+      return { success: false, error: response.data.message };
+    } catch (error) {
+      const errorMsg = error.response?.data?.message;
+      const status = error.response?.status;
+      const data = error.response?.data;
+      
+      // Handle master password lock (423)
+      if (status === 423) {
+        return {
+          success: false,
+          error: errorMsg,
+          locked: true,
+          otpRequired: true,
+          autoLogout: data?.autoLogout || false,
+          attempts: data?.attempts,
+          lockDuration: data?.lockDuration,
+          remainingTime: data?.remainingTime,
+          requiresOTP: data?.requiresOTP || true
+        };
+      }
+      
+      // Handle too many attempts but not locked yet (401)
+      if (status === 401) {
+        return {
+          success: false,
+          error: errorMsg,
+          attemptsLeft: data?.attemptsLeft,
+          attempts: data?.attempts,
+          lockThreshold: data?.lockThreshold,
+          autoLogout: data?.autoLogout || false
         };
       }
       
@@ -125,26 +164,66 @@ export const authService = {
     }
   },
 
-  // New function to verify master password with OTP
   verifyMasterWithOTP: async (data) => {
     try {
       const response = await authAPI.verifyMasterWithOTP(data);
       return { success: true, data: response.data };
     } catch (error) {
+      const errorMsg = error.response?.data?.message;
+      const status = error.response?.status;
+      const data = error.response?.data;
+      
+      // FIXED: Also handle OTP requirements in this endpoint
+      if ((status === 423 || status === 401) && (data?.otpRequired || data?.requiresOTP)) {
+        return {
+          success: false,
+          error: errorMsg,
+          otpRequired: true,
+          requiresOTP: data?.requiresOTP || true,
+          locked: data?.locked || false,
+          autoLogout: data?.autoLogout
+        };
+      }
+      
       return {
         success: false,
-        error: error.response?.data?.message || 'Verification failed'
+        error: errorMsg || 'Verification failed'
       };
     }
   },
 
-  // New function to get master password status
   getMasterPasswordStatus: async () => {
     try {
       const response = await authAPI.getMasterPasswordStatus();
       return { success: true, status: response.data.status };
     } catch (error) {
       return { success: false, error: 'Failed to get status' };
+    }
+  },
+
+  // NEW: Send OTP for master password unlock
+  sendMasterPasswordOTP: async (email) => {
+    try {
+      const response = await authAPI.sendOTP({ email });
+      return { success: true, data: response.data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.response?.data?.message || 'Failed to send OTP'
+      };
+    }
+  },
+
+  // NEW: Unlock master password with OTP
+  unlockMasterPassword: async (email, otp) => {
+    try {
+      const response = await authAPI.unlockAccount({ email, otp });
+      return { success: true, data: response.data };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.response?.data?.message || 'Failed to unlock'
+      };
     }
   }
 };
